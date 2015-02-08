@@ -17,11 +17,11 @@ Clipboard = {
 		if(str == '' || str == undefined){
 			str = '<empty>';
 		}
-		
+
 		// Copie par défaut, via le clipboardBuffer
 		clipboardBuffer.val(str);
 		clipboardBuffer.select();
-		
+
 		// Copie via l'API (clipboardData)
 		var oncopyBackup = document.oncopy;
 		document.oncopy = function(e){
@@ -36,7 +36,7 @@ Clipboard = {
 		document.execCommand('copy');
 		document.oncopy = oncopyBackup;
 	},
-	
+
 	/**
 	* Retourne le contenu du presse papier (String)
 	*/
@@ -60,21 +60,21 @@ Action = {
 	copy: function(opt){
 		// Par défaut, on récupère tous les onglets de la fenêtre opt.window
 		var tabQuery = {windowId: opt.window.id};
-		
+
 		// Si "Copy tabs from all windows" est coché, suppression du filtre sur fenêtre courante
 		try {
 			if (localStorage["walk_all_windows"] == "true") {
 				tabQuery.windowId = null;
 			}
 		} catch(ex) {}
-		
+
 		chrome.tabs.query(tabQuery, function(tabs){
 			// Récupération configuration
 			var format = localStorage['format'] ? localStorage['format'] : 'text';
 			var highlighted_tab_only = localStorage['highlighted_tab_only'] == 'true' ? true : false;
 			var extended_mime = typeof localStorage['mime'] != 'undefined' && localStorage['mime'] == 'html' ? true : false;
 			var outputText = '';
-			
+
 			// Filtrage des onglets
 			var tabs_filtered = [];
 			for (var i=0; i < tabs.length; i++) {
@@ -82,12 +82,14 @@ Action = {
 				tabs_filtered.push(tabs[i]);
 			}
 			tabs = tabs_filtered;
-			
+
 			// Génération des données copiées
 			if( format == 'html' ){
 				outputText = CopyTo.html(tabs);
 			} else if( format == 'custom' ) {
 				outputText = CopyTo.custom(tabs);
+			} else if( format == 'opml' ) {
+				outputText = CopyTo.opml(tabs);
 			} else if( format == 'json' ) {
 				outputText = CopyTo.json(tabs);
 				extended_mime = false;
@@ -95,49 +97,49 @@ Action = {
 				outputText = CopyTo.text(tabs);
 				extended_mime = false;
 			}
-			
+
 			// Copie la liste d'URL dans le presse papier
 			Clipboard.write(outputText, extended_mime);
-			
+
 			// Indique à la popup le nombre d'URL copiées, pour affichage dans la popup
 			chrome.runtime.sendMessage({type: "copy", copied_url: tabs.length});
-			
+
 			// Tracking event
 			_gaq.push(['_setCustomVar', 3, 'ActionMeta', opt.gaEvent.actionMeta]);
 			_gaq.push(['_trackEvent', 'Action', opt.gaEvent.action, opt.gaEvent.label, tabs.length]);
 		});
 	},
-	
+
 	/**
 	* Ouvre toutes les URLs du presse papier dans des nouveaux onglets
 	* @param opt.gaEvent : données nécessaires à la génération le l'event ga (action, label, actionMeta)
 	*/
 	paste: function(opt){
 		var clipboardString = Clipboard.read();
-		
+
 		// Extraction des URL, soit ligne par ligne, soit intelligent paste
 		if( localStorage["intelligent_paste"] == "true" ){
 			var urlList = clipboardString.match(/(https?|ftp|ssh|mailto):\/\/[a-z0-9\/:%_+.,#?!@&=-]+/gi);
 		} else {
 			var urlList = clipboardString.split("\n");
 		}
-		
+
 		// Si urlList est vide, on affiche un message d'erreur et on sort
 		if (urlList == null) {
 			chrome.runtime.sendMessage({type: "paste", errorMsg: "No URL found in the clipboard"});
 			return;
 		}
-		
+
 		// Extraction de l'URL pour les lignes au format HTML (<a...>#url</a>)
 		$.each(urlList, function(key, val){
 			var matches = val.match(new RegExp('<a[^>]+href="([^"]+)"', 'i'));
 			try{
 				urlList[key] = matches[1];
 			} catch(e){}
-			
+
 			urlList[key] = jQuery.trim(urlList[key]);
 		});
-		
+
 		// Suppression des URLs non conformes
 		urlList = urlList.filter(function(url){
 			if( url == "" || url == undefined ){
@@ -145,15 +147,15 @@ Action = {
 			}
 			return true;
 		});
-		
+
 		// Ouverture de toutes les URLs dans des onglets
 		$.each(urlList, function(key, val){
 			chrome.tabs.create({url: val});
 		});
-		
+
 		// Indique à la popup de se fermer
 		chrome.runtime.sendMessage({type: "paste"});
-		
+
 		// Tracking event
 		_gaq.push(['_setCustomVar', 3, 'ActionMeta', opt.gaEvent.actionMeta]);
 		_gaq.push(['_trackEvent', 'Action', opt.gaEvent.action, opt.gaEvent.label, urlList.length]);
@@ -184,7 +186,22 @@ CopyTo = {
 		}
 		return s;
 	},
-	
+
+	opml: function(tabs){
+		var data = [];
+		var opml = "<?xml version=\"1.0\"?><opml version=\"2.0\"><head></head><body>";
+		for (var i=0; i < tabs.length; i++) {
+			url = tabs[i].url
+				// Adapted from: http://davidwalsh.name/remove-utm-parameters-urls
+				.replace(/(\&)?utm([_a-z0-9=\.]+)/g, "").replace(/\?$/, "")
+				.replace(/&/g, "&amp;amp;");
+			title = tabs[i].title.replace(/&/g, "&amp;amp;");
+			opml += "<outline text=\"" + title + "\" _note=\"" + url + "\" />";
+		}
+		opml += "</body></opml>";
+		return opml;
+	},
+
 	// Copie les URLs des onglets au format custom
 	custom: function(tabs){
 		var template = (localStorage['format_custom_advanced'] && localStorage['format_custom_advanced'] != '') ? localStorage['format_custom_advanced'] : null;
@@ -196,22 +213,22 @@ CopyTo = {
 			var current_row   = template;
 			var current_url   = tabs[i].url;
 			var current_title = tabs[i].title;
-			
+
 			// Encodage (html entities) du title
 			// try{
 				// Encoder.EncodeType = "entity";
 				// current_title = Encoder.htmlEncode(current_title);
 			// } catch(ex){}
-			
+
 			// Injection des variables dans le template
 			current_row = current_row.replace(/\$url/gi, current_url);
 			current_row = current_row.replace(/\$title/gi, current_title);
-			
+
 			s += current_row;
 		}
 		return s;
 	},
-	
+
 	// Copie les URLs des onglets au format texte
 	text: function(tabs){
 		var s = '';
@@ -221,7 +238,7 @@ CopyTo = {
 		}
 		return s;
 	},
-	
+
 	// Copie les URLs des onglets au format JSON
 	json: function(tabs){
 		var data = [];
@@ -264,7 +281,7 @@ chrome.commands.onCommand.addListener(function(command){
 UpdateManager = {
 	/** Informaion remplie par le callback runtime.onInstalled */
 	runtimeOnInstalledStatus: null,
-	
+
 	/** (bool) Indique si une mise à jour de l'extension a eu lieu récemment */
 	recentUpdate: function(){
 		try {
@@ -275,7 +292,7 @@ UpdateManager = {
 		} catch (ex) {}
 		return false;
 	},
-	
+
 	/** Défini le badge si une mise à jour a eu lieu récemment */
 	setBadge: function(){
 		if (!UpdateManager.recentUpdate()) {
@@ -291,23 +308,23 @@ chrome.runtime.onInstalled.addListener(function(details){
 		UpdateManager.runtimeOnInstalledStatus = "Not an update ("+details.reason+")"
 		return;
 	}
-	
+
 	if (details.previousVersion == chrome.runtime.getManifest().version) {
 		UpdateManager.runtimeOnInstalledStatus = "Same version ("+details.previousVersion+")";
 		return;
 	}
-	
+
 	// Mémorisation date de la dernière mise à jour
 	localStorage['update_last_time'] = new Date().getTime();
 	localStorage['update_previous_version'] = details.previousVersion;
 	UpdateManager.runtimeOnInstalledStatus = "Updated";
-	
+
 	// Mise à jour badge
 	UpdateManager.setBadge();
-	
+
 	// Tracking event
 	_gaq.push(['_trackEvent', 'Lifecycle', 'Update', details.previousVersion]);
-	
+
 	// Affichage de la notification
 	chrome.notifications.create("cpau_update_notification", {
 		type: "basic",
@@ -333,13 +350,13 @@ AnalyticsHelper = {
 		var matches = chrome.extension.getURL('stop').match(new RegExp("[a-z0-9_-]+://([a-z0-9_-]+)/stop","i"));
 		return (matches[1] == undefined) ? false : matches[1];
 	},
-	
+
 	/** Retourne une chaîne de caractère (objet json serialisé) qui contient des informations sur la configuration du plugin */
 	getShortSettings: function(settings){
 		if (settings == undefined) {
 			settings = localStorage;
 		}
-		
+
 		var shortSettings = {
 			fm: localStorage['format'] ? localStorage['format'] : 'text',
 			an: localStorage['anchor'] ? localStorage['anchor'] : 'url',
@@ -349,10 +366,10 @@ AnalyticsHelper = {
 			ip: localStorage['intelligent_paste'] == "true" ? 1 : 0,
 			ww: localStorage['walk_all_windows'] == "true" ? 1 : 0
 		};
-		
+
 		return AnalyticsHelper.serialize(shortSettings);
 	},
-	
+
 	/** Retourne un extrait de configuration pour le tracking des events de catégorie Action */
 	getActionMeta: function(action){
 		switch(action){
@@ -373,7 +390,7 @@ AnalyticsHelper = {
 		}
 		return AnalyticsHelper.serialize(shortSettings);
 	},
-	
+
 	/** Serialise un objet pour transmission à ga. data doit être un tableau (array ou object) */
 	serialize: function(data){
 		var chunks = [];
@@ -383,14 +400,14 @@ AnalyticsHelper = {
 		var serialized = chunks.join(",");
 		return serialized;
 	},
-	
+
 	/** Charge google analytics (ga.js) dans le document passé en paramètre */
 	gaLoad: function(doc){
 		var ga = doc.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
 		ga.src = 'https://ssl.google-analytics.com/ga.js';
 		var s = doc.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
 	},
-	
+
 	/** Identifiant du compte google analytics */
 	gaAccount: 'UA-30512078-5'
 };
